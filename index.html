@@ -1,0 +1,715 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>磁磚計畫 CAD 匯入立面版 v17.3</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dxf-parser@1.1.2/dist/dxf-parser.min.js"></script>
+    <style>
+        body { background-color: #f1f5f9; font-family: 'Inter', 'Microsoft JhengHei', system-ui, sans-serif; }
+        .canvas-bg { background-color: #f8fafc; background-image: radial-gradient(#cbd5e1 1px, transparent 1px); background-size: 24px 24px; }
+        .panel { background: white; border-radius: 16px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); border: 1px solid #e2e8f0; }
+        .input-group label { display: block; font-size: 0.75rem; font-weight: 700; color: #64748b; margin-bottom: 0.2rem; text-transform: uppercase; }
+        .input-group input { width: 100%; border: 1px solid #cbd5e1; border-radius: 8px; padding: 0.4rem 0.6rem; font-size: 0.85rem; outline: none; transition: all 0.2s; }
+        .input-group input:focus { border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1); }
+        .section-title { font-size: 0.875rem; font-weight: 800; color: #1e293b; border-left: 4px solid #2563eb; padding-left: 0.75rem; margin-bottom: 1rem; margin-top: 1.5rem; }
+        .tab-btn { padding: 0.5rem 1rem; font-size: 0.875rem; font-weight: 700; border-radius: 8px 8px 0 0; transition: all 0.2s; border-bottom: 3px solid transparent; white-space: nowrap; }
+        .tab-btn.active { color: #2563eb; border-bottom-color: #2563eb; background: #eff6ff; }
+        .tab-btn:not(.active) { color: #64748b; }
+        .tab-btn:not(.active):hover { background: #f8fafc; }
+        .loading-overlay { display: none; position: absolute; inset: 0; background: rgba(255,255,255,0.9); z-index: 50; align-items: center; justify-content: center; border-radius: 12px; backdrop-filter: blur(2px); }
+        @media print { .no-print { display: none !important; } }
+
+        /* 隱藏的 PDF 首頁模板 */
+        #pdf-header-template {
+            position: absolute; left: -9999px; top: -9999px;
+            width: 1000px; padding: 40px; background: white; color: #334155;
+        }
+    </style>
+</head>
+<body class="p-4 md:p-6">
+    <!-- 隱藏的統計首頁 HTML 模板 (用於截圖解決 PDF 亂碼) -->
+    <div id="pdf-header-template">
+        <div style="background: #1e293b; padding: 30px; border-radius: 12px; color: white; margin-bottom: 30px; text-align: center;">
+            <h1 style="font-size: 36px; font-weight: 900; margin: 0;">磁磚計畫分析匯總報告</h1>
+        </div>
+        <div style="display: flex; justify-content: space-between; margin-bottom: 40px; font-size: 18px;">
+            <div>
+                <p><strong>工程地點：</strong><span id="pdf-loc">--</span></p>
+                <p><strong>施作項目：</strong><span id="pdf-itm">--</span></p>
+            </div>
+            <div style="text-align: right;">
+                <p><strong>報告日期：</strong><span id="pdf-date">--</span></p>
+            </div>
+        </div>
+        <table style="width: 100%; border-collapse: collapse; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+            <thead>
+                <tr style="background: #eff6ff; text-align: left;">
+                    <th style="padding: 15px; border-bottom: 2px solid #e2e8f0;">分類項目 (尺寸)</th>
+                    <th style="padding: 15px; border-bottom: 2px solid #e2e8f0;">淨面積 (m²)</th>
+                    <th style="padding: 15px; border-bottom: 2px solid #e2e8f0;">需求總數 (片)</th>
+                    <th style="padding: 15px; border-bottom: 2px solid #e2e8f0;">總損耗 (%)</th>
+                </tr>
+            </thead>
+            <tbody id="pdf-table-body">
+                <!-- 由 JS 動態填充 -->
+            </tbody>
+        </table>
+        <div style="margin-top: 30px; color: #64748b; font-size: 14px;">
+            * 需求總數已包含設定之額外損耗率。
+        </div>
+    </div>
+
+    <div class="max-w-7xl mx-auto">
+        <header class="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4 bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
+            <div>
+                <h1 class="text-2xl font-black text-slate-800 tracking-tight">磁磚計畫 CAD 匯入立面版 <span class="text-blue-600 text-base">v17.3</span></h1>
+            </div>
+            <div class="flex gap-2 no-print">
+                <button id="export-btn" onclick="exportFullReport(this)" class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2.5 rounded-xl font-bold shadow-md transition flex items-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><path d="M12 18v-6"/><path d="m9 15 3 3 3-3"/></svg>
+                    完整計算並匯出分析報告 (PDF)
+                </button>
+            </div>
+        </header>
+
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            <!-- 控制面板 -->
+            <div class="lg:col-span-4 space-y-4 no-print">
+                <div class="panel p-5 overflow-y-auto max-h-[calc(100vh-120px)]">
+                    <div class="bg-blue-50 p-4 rounded-xl border border-blue-100 mb-4">
+                        <div id="upload-controls">
+                            <input type="file" id="dxf-upload" accept=".dxf" class="hidden" onchange="handleDXFUpload(event)">
+                            <button onclick="document.getElementById('dxf-upload').click()" class="w-full bg-blue-600 text-white py-2.5 rounded-lg font-bold hover:bg-blue-700 transition">上傳 DXF 平面圖</button>
+                        </div>
+                        <div id="clear-controls" class="hidden">
+                            <button onclick="clearDXFData()" class="w-full bg-red-100 text-red-600 py-2.5 rounded-lg font-bold hover:bg-red-200 transition border border-red-200">清除平面圖數據</button>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-3 mb-4">
+                        <div class="input-group"><label>工程地點</label><input type="text" id="header-work-location" placeholder="地點" oninput="updateAll()"></div>
+                        <div class="input-group"><label>施作項目</label><input type="text" id="header-work-item" placeholder="項目" oninput="updateAll()"></div>
+                    </div>
+
+                    <!-- 地磚設定 -->
+                    <div id="setting-floor">
+                        <h3 class="section-title text-emerald-600 border-emerald-600">地磚規格設定</h3>
+                        <div class="grid grid-cols-3 gap-2 mb-3">
+                            <div class="input-group"><label>長 (cm)</label><input type="number" id="f-tile-w" value="60" oninput="updateAll()"></div>
+                            <div class="input-group"><label>寬 (cm)</label><input type="number" id="f-tile-h" value="60" oninput="updateAll()"></div>
+                            <div class="input-group"><label>縫 (cm)</label><input type="number" id="f-tile-gap" value="0.2" step="0.05" oninput="updateAll()"></div>
+                        </div>
+                        <div class="input-group"><label class="text-emerald-700">外加損耗率 (%)</label><input type="number" id="f-extra-loss" value="0" step="1" oninput="updateAll()"></div>
+                    </div>
+
+                    <!-- 壁磚設定 -->
+                    <div id="setting-wall" class="hidden">
+                        <h3 class="section-title text-blue-600 border-blue-600">壁磚規格設定</h3>
+                        <div class="grid grid-cols-3 gap-2 mb-4">
+                            <div class="input-group"><label>預設牆高</label><input type="number" id="wall-height" value="240" oninput="updateAll()"></div>
+                            <div class="input-group"><label>壁磚長</label><input type="number" id="w-tile-w" value="60" oninput="updateAll()"></div>
+                            <div class="input-group"><label>壁磚寬</label><input type="number" id="w-tile-h" value="30" oninput="updateAll()"></div>
+                        </div>
+                        <div class="grid grid-cols-2 gap-3 mb-4">
+                             <div class="input-group"><label>壁磚縫寬</label><input type="number" id="w-tile-gap" value="0.2" step="0.05" oninput="updateAll()"></div>
+                             <div class="input-group"><label class="text-blue-700">外加損耗率 (%)</label><input type="number" id="w-extra-loss" value="0" step="1" oninput="updateAll()"></div>
+                        </div>
+
+                        <h3 class="section-title text-orange-600 border-orange-600">目前牆面開口 (門/窗)</h3>
+                        <div class="bg-orange-50 p-3 rounded-lg border border-orange-100 space-y-3">
+                            <div class="grid grid-cols-2 gap-3">
+                                <div class="input-group"><label>開口寬度 (W)</label><input type="number" id="open-w" value="0" oninput="updateOpening()"></div>
+                                <div class="input-group"><label>開口高度 (H)</label><input type="number" id="open-h" value="0" oninput="updateOpening()"></div>
+                            </div>
+                            <div class="grid grid-cols-2 gap-3">
+                                <div class="input-group"><label>台度/高度 (Y)</label><input type="number" id="open-y" value="0" oninput="updateOpening()"></div>
+                                <div class="input-group"><label>距左距離 (X)</label><input type="number" id="open-x" value="20" oninput="updateOpening()"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <h3 class="section-title">通用起磚偏移 (cm)</h3>
+                    <div class="grid grid-cols-2 gap-3 mb-6">
+                        <div class="input-group"><label>水平偏移</label><input type="number" id="offset-x" value="0" oninput="updateAll()"></div>
+                        <div class="input-group"><label>垂直偏移</label><input type="number" id="offset-y" value="0" oninput="updateAll()"></div>
+                    </div>
+
+                    <!-- 統計資訊 -->
+                    <div id="summary-panel" class="space-y-4 pt-4 border-t border-slate-200">
+                        <div class="p-4 bg-slate-900 text-white rounded-xl">
+                            <p class="text-[10px] font-bold text-slate-400 mb-2">當前視圖統計 (含外加損耗)</p>
+                            <div class="flex justify-between text-sm mb-1"><span>淨面積</span><span id="calc-area" class="font-mono text-emerald-400">0.00 m²</span></div>
+                            <div class="flex justify-between text-sm mb-1"><span>需求片數</span><span id="calc-total-count" class="font-mono">0 片</span></div>
+                            <div class="flex justify-between text-lg font-black text-blue-400 border-t border-slate-700 pt-2 mt-2"><span>總損耗</span><span id="calc-loss">0.00 %</span></div>
+                        </div>
+
+                        <div id="total-wall-sum" class="p-4 bg-blue-900 text-white rounded-xl">
+                            <p class="text-[10px] font-bold text-blue-300 mb-2">全室壁磚合併統計 (含外加損耗)</p>
+                            <div class="flex justify-between text-xs mb-1"><span>總淨面積</span><span id="all-walls-area" class="font-mono">0.00 m²</span></div>
+                            <div class="flex justify-between text-xs mb-1"><span>總需求數</span><span id="all-walls-total" class="font-mono">0 片</span></div>
+                            <div class="flex justify-between text-lg font-black text-orange-400 border-t border-blue-800 pt-2 mt-2"><span>總損耗</span><span id="all-walls-loss">0.00 %</span></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 繪圖區 -->
+            <div id="capture-area" class="lg:col-span-8 bg-white p-6 rounded-2xl shadow-sm border border-slate-200 flex flex-col relative">
+                <div id="loader" class="loading-overlay" data-html2canvas-ignore="true">
+                    <div class="text-center">
+                        <div class="inline-block animate-spin rounded-full h-8 w-8 border-4 border-blue-600 border-t-transparent mb-2"></div>
+                        <p id="loader-text" class="font-bold text-slate-600 block">運算中...</p>
+                    </div>
+                </div>
+
+                <div class="flex overflow-x-auto no-print border-b border-slate-200 mb-4" id="tab-container">
+                    <button class="tab-btn active" onclick="switchTab('floor')">空間平面圖</button>
+                </div>
+                
+                <div class="mb-4 flex justify-between items-end">
+                    <div>
+                        <h2 class="text-xl font-black" id="view-title">空間平面配置圖</h2>
+                        <p class="text-[10px] text-slate-500">
+                            地點：<span id="disp-work-location" class="text-slate-800 font-bold">--</span> | 
+                            項目：<span id="disp-work-item" class="text-slate-800 font-bold">--</span>
+                        </p>
+                    </div>
+                    <div id="wall-info" class="hidden text-right">
+                        <p class="text-[10px] font-bold text-blue-600">壁磚立面展開 (含開口扣除)</p>
+                        <p class="text-xs font-bold text-slate-700" id="wall-dim-label">--</p>
+                    </div>
+                </div>
+
+                <div class="relative canvas-bg rounded-xl border border-slate-300 overflow-hidden flex-grow" style="min-height: 500px;">
+                    <canvas id="mainCanvas" class="w-full h-full"></canvas>
+                </div>
+
+                <!-- 底部統計欄位 -->
+                <div class="mt-4 grid grid-cols-5 gap-3" id="bottom-stats">
+                    <div class="p-3 bg-slate-50 rounded-lg border text-center">
+                        <p class="text-[10px] font-bold text-slate-400">淨面積</p>
+                        <p id="stat-area" class="text-sm font-black text-slate-700">0.00 m²</p>
+                    </div>
+                    <div class="p-3 bg-blue-50 rounded-lg border border-blue-100 text-center">
+                        <p class="text-[10px] font-bold text-blue-400">整磚</p>
+                        <p id="stat-full" class="text-sm font-black text-blue-700">0</p>
+                    </div>
+                    <div class="p-3 bg-orange-50 rounded-lg border border-orange-100 text-center">
+                        <p class="text-[10px] font-bold text-orange-400">加工磚</p>
+                        <p id="stat-half" class="text-sm font-black text-orange-700">0</p>
+                    </div>
+                    <div class="p-3 bg-green-50 rounded-lg border border-green-100 text-center">
+                        <p class="text-[10px] font-bold text-green-500">需求數</p>
+                        <p id="stat-total" class="text-sm font-black text-green-700">0</p>
+                    </div>
+                    <div class="p-3 bg-rose-50 rounded-lg border border-rose-100 text-center">
+                        <p class="text-[10px] font-bold text-rose-500">總損耗</p>
+                        <p id="stat-loss" class="text-sm font-black text-rose-700">0.00 %</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('mainCanvas');
+        const ctx = canvas.getContext('2d');
+        const loader = document.getElementById('loader');
+        const loaderText = document.getElementById('loader-text');
+        
+        let currentTab = 'floor'; 
+        let walls = []; 
+        let floorPolygon = [];
+        let bounds = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+        let stats = { area: 0, full: 0, half: 0, total: 0, loss: 0 };
+        let globalResults = { floor: {area:0, total:0, loss:0}, wallSum: {area:0, total:0, loss:0} };
+
+        function updateAll() {
+            syncHeaders();
+            syncSettingsVisibility();
+            resizeCanvas();
+            draw();
+            calculateGlobalStats();
+            updateUIStats();
+        }
+
+        function syncHeaders() {
+            document.getElementById('disp-work-location').innerText = document.getElementById('header-work-location').value || '--';
+            document.getElementById('disp-work-item').innerText = document.getElementById('header-work-item').value || '--';
+        }
+
+        function syncSettingsVisibility() {
+            if (currentTab === 'floor') {
+                document.getElementById('setting-floor').classList.remove('hidden');
+                document.getElementById('setting-wall').classList.add('hidden');
+            } else {
+                document.getElementById('setting-floor').classList.add('hidden');
+                document.getElementById('setting-wall').classList.remove('hidden');
+                const idx = parseInt(currentTab.split('_')[1]);
+                if (walls[idx]) {
+                    document.getElementById('open-w').value = walls[idx].openW || 0;
+                    document.getElementById('open-h').value = walls[idx].openH || 0;
+                    document.getElementById('open-x').value = walls[idx].openX || 0;
+                    document.getElementById('open-y').value = walls[idx].openY || 0;
+                }
+            }
+        }
+
+        function updateOpening() {
+            if (currentTab === 'floor') return;
+            const idx = parseInt(currentTab.split('_')[1]);
+            walls[idx].openW = parseFloat(document.getElementById('open-w').value) || 0;
+            walls[idx].openH = parseFloat(document.getElementById('open-h').value) || 0;
+            walls[idx].openX = parseFloat(document.getElementById('open-x').value) || 0;
+            walls[idx].openY = parseFloat(document.getElementById('open-y').value) || 0;
+            updateAll();
+        }
+
+        function resizeCanvas() {
+            const container = canvas.parentNode;
+            canvas.width = container.clientWidth;
+            canvas.height = container.clientHeight;
+        }
+
+        function switchTab(tabId) {
+            currentTab = tabId;
+            const btns = document.querySelectorAll('.tab-btn');
+            btns.forEach(b => b.classList.remove('active'));
+            
+            const btnArr = Array.from(btns);
+            let target;
+            if (tabId === 'floor') {
+                target = btnArr.find(b => b.innerText === '空間平面圖');
+            } else {
+                const idx = parseInt(tabId.split('_')[1]);
+                target = btnArr.find(b => b.innerText === '牆面 ' + (idx + 1));
+            }
+            if (target) target.classList.add('active');
+
+            if (tabId === 'floor') {
+                document.getElementById('view-title').innerText = "空間平面配置圖";
+                document.getElementById('wall-info').classList.add('hidden');
+            } else {
+                const idx = parseInt(tabId.split('_')[1]);
+                document.getElementById('view-title').innerText = `牆面立面圖 - 牆 ${idx + 1}`;
+                document.getElementById('wall-info').classList.remove('hidden');
+                document.getElementById('wall-dim-label').innerText = `L: ${walls[idx].length.toFixed(1)} cm / H: ${document.getElementById('wall-height').value} cm`;
+            }
+            updateAll();
+        }
+
+        async function handleDXFUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            loader.style.display = 'flex';
+            
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const parser = new DxfParser();
+                    const dxf = parser.parseSync(e.target.result);
+                    processDXF(dxf);
+                    document.getElementById('upload-controls').classList.add('hidden');
+                    document.getElementById('clear-controls').classList.remove('hidden');
+                    updateAll();
+                } catch (err) {
+                    alert("DXF 解析錯誤");
+                } finally {
+                    loader.style.display = 'none';
+                }
+            };
+            reader.readAsText(file);
+        }
+
+        function processDXF(dxf) {
+            const polylines = dxf.entities.filter(ent => ent.type === 'LWPOLYLINE' || ent.type === 'POLYLINE');
+            if (polylines.length === 0) return;
+
+            floorPolygon = polylines[0].vertices.map(v => ({ x: v.x, y: v.y }));
+            
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            floorPolygon.forEach(v => {
+                minX = Math.min(minX, v.x); minY = Math.min(minY, v.y);
+                maxX = Math.max(maxX, v.x); maxY = Math.max(maxY, v.y);
+            });
+            bounds = { minX, minY, maxX, maxY };
+
+            walls = [];
+            const len = floorPolygon.length;
+            for (let i = 0; i < len; i++) {
+                const p1 = floorPolygon[i];
+                const p2 = floorPolygon[(i + 1) % len];
+                const d = Math.sqrt(Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2));
+                if (d > 1) {
+                    walls.push({ 
+                        x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, length: d,
+                        openW: 0, openH: 0, openX: 0, openY: 0
+                    });
+                }
+            }
+
+            const container = document.getElementById('tab-container');
+            container.innerHTML = `<button class="tab-btn active" onclick="switchTab('floor')">空間平面圖</button>`;
+            walls.forEach((wall, i) => {
+                container.innerHTML += `<button class="tab-btn" onclick="switchTab('wall_${i}')">牆面 ${i+1}</button>`;
+            });
+        }
+
+        function clearDXFData() {
+            floorPolygon = []; walls = []; currentTab = 'floor';
+            document.getElementById('tab-container').innerHTML = `<button class="tab-btn active" onclick="switchTab('floor')">空間平面圖</button>`;
+            document.getElementById('upload-controls').classList.remove('hidden');
+            document.getElementById('clear-controls').classList.add('hidden');
+            updateAll();
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            if (floorPolygon.length === 0) return;
+
+            if (currentTab === 'floor') {
+                drawFloor();
+            } else {
+                const wallIdx = parseInt(currentTab.split('_')[1]);
+                drawWallElevation(wallIdx);
+            }
+        }
+
+        function drawFloor() {
+            const pad = 80;
+            const w = bounds.maxX - bounds.minX;
+            const h = bounds.maxY - bounds.minY;
+            const scale = Math.min((canvas.width - pad) / w, (canvas.height - pad) / h);
+            const ox = (canvas.width - w * scale) / 2 - bounds.minX * scale;
+            const oy = (canvas.height - h * scale) / 2 + bounds.maxY * scale;
+
+            const tw = parseFloat(document.getElementById('f-tile-w').value);
+            const th = parseFloat(document.getElementById('f-tile-h').value);
+            const gap = parseFloat(document.getElementById('f-tile-gap').value);
+            const extraLoss = parseFloat(document.getElementById('f-extra-loss').value) || 0;
+
+            const result = calculateTiling(floorPolygon, [], tw, th, gap, true, extraLoss);
+            renderTiles(result.tiles, scale, ox, oy, true, tw, th);
+
+            ctx.strokeStyle = '#334155';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            floorPolygon.forEach((v, i) => {
+                const x = v.x * scale + ox;
+                const y = -v.y * scale + oy;
+                if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+            });
+            ctx.closePath();
+            ctx.stroke();
+
+            walls.forEach((wall, i) => {
+                const mx = (wall.x1 + wall.x2) / 2 * scale + ox;
+                const my = -(wall.y1 + wall.y2) / 2 * scale + oy;
+                drawLabel(`牆 ${i+1}`, mx, my, 0, '#2563eb', '#fff');
+            });
+
+            stats = result;
+            globalResults.floor = result;
+        }
+
+        function drawWallElevation(idx) {
+            const wall = walls[idx];
+            const wallH = parseFloat(document.getElementById('wall-height').value) || 240;
+            const wallW = wall.length;
+            
+            const pad = 100;
+            const scale = Math.min((canvas.width - pad) / wallW, (canvas.height - pad) / wallH);
+            const ox = (canvas.width - wallW * scale) / 2;
+            const oy = (canvas.height + wallH * scale) / 2;
+
+            const tw = parseFloat(document.getElementById('w-tile-w').value);
+            const th = parseFloat(document.getElementById('w-tile-h').value);
+            const gap = parseFloat(document.getElementById('w-tile-gap').value);
+            const extraLoss = parseFloat(document.getElementById('w-extra-loss').value) || 0;
+
+            const wallPoly = [{x: 0, y: 0}, {x: wallW, y: 0}, {x: wallW, y: wallH}, {x: 0, y: wallH}];
+            const holes = [];
+            if (wall.openW > 0 && wall.openH > 0) {
+                holes.push([
+                    {x: wall.openX, y: wall.openY},
+                    {x: wall.openX + wall.openW, y: wall.openY},
+                    {x: wall.openX + wall.openW, y: wall.openY + wall.openH},
+                    {x: wall.openX, y: wall.openY + wall.openH}
+                ]);
+            }
+
+            const result = calculateTiling(wallPoly, holes, tw, th, gap, false, extraLoss);
+            renderTiles(result.tiles, scale, ox, oy, false, tw, th);
+
+            ctx.strokeStyle = '#1e293b';
+            ctx.lineWidth = 3;
+            ctx.strokeRect(ox, oy - wallH * scale, wallW * scale, wallH * scale);
+
+            holes.forEach(hole => {
+                ctx.setLineDash([5, 5]);
+                ctx.strokeStyle = '#64748b';
+                ctx.lineWidth = 2;
+                const hx = hole[0].x * scale + ox;
+                const hy = oy - (hole[0].y + (hole[2].y - hole[0].y)) * scale;
+                const hw = (hole[1].x - hole[0].x) * scale;
+                const hh = (hole[2].y - hole[0].y) * scale;
+                ctx.strokeRect(hx, hy, hw, hh);
+                ctx.setLineDash([]);
+                drawLabel("開口", hx + hw/2, hy + hh/2, 0, "#475569", "#f1f5f9");
+            });
+
+            drawLabel(`${wallW.toFixed(1)} cm`, ox + (wallW * scale)/2, oy + 25, 0);
+            drawLabel(`${wallH.toFixed(1)} cm`, ox - 45, oy - (wallH * scale)/2, -Math.PI/2);
+            
+            stats = result;
+        }
+
+        function calculateTiling(polygon, holes, tw, th, gap, isFloor, extraLossPercent) {
+            const offX = parseFloat(document.getElementById('offset-x').value) || 0;
+            const offY = parseFloat(document.getElementById('offset-y').value) || 0;
+            const stepX = tw + gap;
+            const stepY = th + gap;
+
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            polygon.forEach(v => {
+                minX = Math.min(minX, v.x); minY = Math.min(minY, v.y);
+                maxX = Math.max(maxX, v.x); maxY = Math.max(maxY, v.y);
+            });
+
+            let full = 0, half = 0;
+            const tiles = [];
+            const SAMPLES_AXIS = 4;
+
+            for (let x = minX + offX - stepX; x <= maxX; x += stepX) {
+                for (let y = minY + offY - stepY; y <= maxY; y += stepY) {
+                    let sampleCount = 0;
+                    for (let sx = 0; sx < SAMPLES_AXIS; sx++) {
+                        for (let sy = 0; sy < SAMPLES_AXIS; sy++) {
+                            const pt = {
+                                x: x + (tw / SAMPLES_AXIS) * (sx + 0.5),
+                                y: y + (th / SAMPLES_AXIS) * (sy + 0.5)
+                            };
+                            if (isPointInPoly(pt, polygon) && !holes.some(h => isPointInPoly(pt, h))) sampleCount++;
+                        }
+                    }
+                    const ratio = sampleCount / (SAMPLES_AXIS * SAMPLES_AXIS);
+                    if (ratio > 0.05) {
+                        const isFull = ratio > 0.6;
+                        tiles.push({ x, y, isFull });
+                        if (isFull) full++; else half++;
+                    }
+                }
+            }
+
+            let areaVal = 0;
+            if (isFloor) {
+                for (let i = 0; i < polygon.length; i++) {
+                    let j = (i + 1) % polygon.length;
+                    areaVal += polygon[i].x * polygon[j].y;
+                    areaVal -= polygon[j].x * polygon[i].y;
+                }
+                areaVal = Math.abs(areaVal) / 20000;
+            } else {
+                const w = polygon[1].x - polygon[0].x;
+                const h = polygon[2].y - polygon[0].y;
+                const hArea = holes.reduce((acc, hl) => acc + (hl[1].x - hl[0].x) * (hl[2].y - hl[0].y), 0);
+                areaVal = (w * h - hArea) / 10000;
+            }
+
+            const baseTotalCount = Math.ceil(full + half * 0.5);
+            const finalTotalCount = Math.ceil(baseTotalCount * (1 + extraLossPercent / 100));
+            const singleTileAreaPlusGap = (tw + gap) * (th + gap) / 10000;
+            
+            let totalLossPercent = 0;
+            if (areaVal > 0) {
+                const theoreticalCount = areaVal / singleTileAreaPlusGap;
+                totalLossPercent = ((finalTotalCount / theoreticalCount) - 1) * 100;
+            }
+
+            return { tiles, full, half, total: finalTotalCount, area: areaVal, loss: totalLossPercent };
+        }
+
+        function renderTiles(tiles, scale, ox, oy, isFloor, tw, th) {
+            tiles.forEach(t => {
+                ctx.fillStyle = t.isFull ? 'rgba(37, 99, 235, 0.12)' : 'rgba(249, 115, 22, 0.12)';
+                ctx.strokeStyle = t.isFull ? 'rgba(30, 58, 138, 0.2)' : 'rgba(124, 45, 18, 0.2)';
+                const dx = t.x * scale + ox;
+                const dy = isFloor ? (-t.y * scale + oy - th * scale) : (oy - (t.y + th) * scale);
+                ctx.fillRect(dx, dy, tw * scale, th * scale);
+                ctx.strokeRect(dx, dy, tw * scale, th * scale);
+            });
+        }
+
+        function calculateGlobalStats() {
+            if (walls.length === 0) return;
+
+            const wallH = parseFloat(document.getElementById('wall-height').value) || 240;
+            const tw = parseFloat(document.getElementById('w-tile-w').value);
+            const th = parseFloat(document.getElementById('w-tile-h').value);
+            const gap = parseFloat(document.getElementById('w-tile-gap').value);
+            const extraLoss = parseFloat(document.getElementById('w-extra-loss').value) || 0;
+
+            let gArea = 0, gTotal = 0;
+
+            walls.forEach((wall, idx) => {
+                const wallPoly = [{x: 0, y: 0}, {x: wall.length, y: 0}, {x: wall.length, y: wallH}, {x: 0, y: wallH}];
+                const holes = [];
+                if (wall.openW > 0 && wall.openH > 0) {
+                    holes.push([
+                        {x: wall.openX, y: wall.openY},
+                        {x: wall.openX + wall.openW, y: wall.openY},
+                        {x: wall.openX + wall.openW, y: wall.openY + wall.openH},
+                        {x: wall.openX, y: wall.openY + wall.openH}
+                    ]);
+                }
+                const res = calculateTiling(wallPoly, holes, tw, th, gap, false, extraLoss);
+                gArea += res.area;
+                gTotal += res.total;
+            });
+
+            const singleTileAreaPlusGap = (tw + gap) * (th + gap) / 10000;
+            let gLoss = 0;
+            if (gArea > 0) {
+                const theoreticalCount = gArea / singleTileAreaPlusGap;
+                gLoss = ((gTotal / theoreticalCount) - 1) * 100;
+            }
+
+            globalResults.wallSum = { area: gArea, total: gTotal, loss: gLoss };
+
+            document.getElementById('all-walls-area').innerText = `${gArea.toFixed(2)} m²`;
+            document.getElementById('all-walls-total').innerText = `${gTotal} 片`;
+            document.getElementById('all-walls-loss').innerText = `${gLoss.toFixed(2)} %`;
+        }
+
+        function isPointInPoly(pt, poly) {
+            let inside = false;
+            for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+                const xi = poly[i].x, yi = poly[i].y;
+                const xj = poly[j].x, yj = poly[j].y;
+                const intersect = ((yi > pt.y) !== (yj > pt.y)) && (pt.x < (xj - xi) * (pt.y - yi) / (yj - yi) + xi);
+                if (intersect) inside = !inside;
+            }
+            return inside;
+        }
+
+        function drawLabel(text, x, y, angle, color, bgColor) {
+            ctx.save(); ctx.translate(x, y); ctx.rotate(angle);
+            ctx.font = 'bold 11px sans-serif';
+            const tw = ctx.measureText(text).width;
+            if(bgColor) {
+                ctx.fillStyle = bgColor;
+                ctx.fillRect(-tw/2 - 4, -8, tw + 8, 16);
+            }
+            ctx.fillStyle = color; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+            ctx.fillText(text, 0, 0); ctx.restore();
+        }
+
+        function updateUIStats() {
+            document.getElementById('calc-area').innerText = `${stats.area.toFixed(2)} m²`;
+            document.getElementById('calc-total-count').innerText = `${stats.total} 片`;
+            document.getElementById('calc-loss').innerText = `${stats.loss.toFixed(2)} %`;
+            
+            document.getElementById('stat-area').innerText = `${stats.area.toFixed(2)} m²`;
+            document.getElementById('stat-full').innerText = stats.full;
+            document.getElementById('stat-half').innerText = stats.half;
+            document.getElementById('stat-total').innerText = stats.total;
+            document.getElementById('stat-loss').innerText = `${stats.loss.toFixed(2)} %`;
+        }
+
+        async function exportFullReport(btn) {
+            if (floorPolygon.length === 0) {
+                alert("請先上傳 DXF 圖檔再進行匯出。");
+                return;
+            }
+
+            btn.disabled = true;
+            const originalBtnHtml = btn.innerHTML;
+            btn.innerHTML = `<span class="animate-spin inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full mr-2"></span> 正在產生完整報告...`;
+            loader.style.display = 'flex';
+            
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF('l', 'mm', 'a4');
+            const originalTab = currentTab;
+            const captureElement = document.getElementById('capture-area');
+
+            // 1. 準備統計數據首頁
+            loaderText.innerText = "正在處理：匯總統計首頁...";
+            calculateGlobalStats();
+            
+            const fResult = globalResults.floor;
+            const wResult = globalResults.wallSum;
+
+            // 獲取當前設定尺寸
+            const fW = document.getElementById('f-tile-w').value;
+            const fH = document.getElementById('f-tile-h').value;
+            const wW = document.getElementById('w-tile-w').value;
+            const wH = document.getElementById('w-tile-h').value;
+            
+            document.getElementById('pdf-loc').innerText = document.getElementById('header-work-location').value || '--';
+            document.getElementById('pdf-itm').innerText = document.getElementById('header-work-item').value || '--';
+            document.getElementById('pdf-date').innerText = new Date().toLocaleDateString();
+            
+            const tableBody = document.getElementById('pdf-table-body');
+            tableBody.innerHTML = `
+                <tr style="border-bottom: 1px solid #f1f5f9;">
+                    <td style="padding: 15px;">地面磁磚 (${fW}x${fH})</td>
+                    <td style="padding: 15px;">${fResult.area.toFixed(2)}</td>
+                    <td style="padding: 15px;">${fResult.total}</td>
+                    <td style="padding: 15px;">${fResult.loss.toFixed(2)} %</td>
+                </tr>
+                <tr style="border-bottom: 1px solid #f1f5f9;">
+                    <td style="padding: 15px;">全室壁磚 (${wW}x${wH})</td>
+                    <td style="padding: 15px;">${wResult.area.toFixed(2)}</td>
+                    <td style="padding: 15px;">${wResult.total}</td>
+                    <td style="padding: 15px;">${wResult.loss.toFixed(2)} %</td>
+                </tr>
+            `;
+
+            const headerTemplate = document.getElementById('pdf-header-template');
+            const headerCapture = await html2canvas(headerTemplate, { scale: 2 });
+            doc.addImage(headerCapture.toDataURL('image/jpeg', 0.95), 'JPEG', 10, 10, 277, 180);
+
+            // 2. 處理平面圖
+            loaderText.innerText = "正在處理：空間平面圖...";
+            switchTab('floor');
+            await new Promise(r => requestAnimationFrame(() => setTimeout(r, 800)));
+            let capture = await html2canvas(captureElement, { 
+                scale: 2, 
+                useCORS: true,
+                ignoreElements: (element) => element.id === 'loader'
+            });
+            doc.addPage();
+            doc.addImage(capture.toDataURL('image/jpeg', 0.9), 'JPEG', 0, 0, 297, 210);
+
+            // 3. 處理立面圖
+            for (let i = 0; i < walls.length; i++) {
+                loaderText.innerText = `正在處理：牆面 ${i+1} (${i+1}/${walls.length})...`;
+                switchTab(`wall_${i}`);
+                await new Promise(r => requestAnimationFrame(() => setTimeout(r, 800)));
+                capture = await html2canvas(captureElement, { 
+                    scale: 2, 
+                    useCORS: true,
+                    ignoreElements: (element) => element.id === 'loader'
+                });
+                doc.addPage();
+                doc.addImage(capture.toDataURL('image/jpeg', 0.9), 'JPEG', 0, 0, 297, 210);
+            }
+
+            switchTab(originalTab);
+            const fileName = (document.getElementById('header-work-location').value || '磁磚計畫') + '_分析報告.pdf';
+            doc.save(fileName);
+            
+            loader.style.display = 'none';
+            btn.disabled = false;
+            btn.innerHTML = originalBtnHtml;
+        }
+
+        window.onresize = updateAll;
+        window.onload = updateAll;
+    </script>
+</body>
+</html>
